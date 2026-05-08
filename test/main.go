@@ -53,16 +53,29 @@ func main() {
 
 	logger.NewInfo(rootOpID, fmt.Sprintf("🔧 初始化测试: 交易所=OKX, 模拟盘=%v\n", env["OKX_SIMULATED"]))
 
-	// 订阅 Stream 频道
-	sdk.Stream.SubscribeAccount(func(acc *models.Account) {
-		logger.NewInfo("", fmt.Sprintf("💰 [STREAM] 账户更新: 总权益=%s USD\n", acc.TotalEq))
+	// 1. 注入账户更新监听（多点注入示例）
+	sdk.Stream.AccountObserver().Subscribe(func(acc *models.Account) {
+		logger.NewInfo(rootOpID, fmt.Sprintf("💰 [OBSERVER-1] 账户更新: 总权益=%s USD\n", acc.TotalEq))
 	})
-	sdk.Stream.SubscribePosition(instId, func(pos *models.Position) {
-		logger.NewInfo("", fmt.Sprintf("📊 [STREAM] 持仓更新: 产品=%s, 方向=%s, 仓位=%s, 均价=%s\n", pos.InstId, pos.PosSide, pos.Pos, pos.AvgPx))
+	sdk.Stream.AccountObserver().Subscribe(func(acc *models.Account) {
+		// 模拟另一个系统的审计日志
+		logger.NewInfo(rootOpID, fmt.Sprintf("💰 [OBSERVER-2/Audit] 资产对账完成，Ts=%d\n", acc.Ts))
 	})
-	sdk.Stream.SubscribeTicker(instId, func(t *models.Ticker) {
-		logger.NewInfo("", fmt.Sprintf("📈 [STREAM] 行情更新: 产品=%s, 最新价=%s, 买一=%s, 卖一=%s\n", t.InstId, t.Last, t.BidPx, t.AskPx))
+
+	// 2. 注入持仓更新监听
+	sdk.Stream.PositionObserver().Subscribe(func(pos *models.Position) {
+		logger.NewInfo(rootOpID, fmt.Sprintf("📊 [OBSERVER] 持仓更新: 产品=%s, 方向=%s, 仓位=%s\n", pos.InstId, pos.PosSide, pos.Pos))
 	})
+
+	// 3. 注入行情监听
+	sdk.Stream.TickerObserver().Subscribe(func(t *models.Ticker) {
+		// 仅作为调试输出
+	})
+
+	// 触发订阅逻辑（通过旧的 API 触发，或者直接在 Observer 模式下自动按需触发）
+	sdk.Stream.SubscribeAccount(func(acc *models.Account) {})
+	sdk.Stream.SubscribePosition(instId, func(pos *models.Position) {})
+	sdk.Stream.SubscribeTicker(instId, func(t *models.Ticker) {})
 
 	// 注册全局持久监听
 	sdk.Execution.Observer().OnOrder(listener.OrderEventAll, func(update *listener.Identifiable) {

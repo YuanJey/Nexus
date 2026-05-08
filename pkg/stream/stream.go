@@ -47,4 +47,15 @@ type Stream interface {
 
 	// UnsubscribePosition 注销持仓订阅
 	UnsubscribePosition(instId string, id listener.HandlerID)
+
+	// ─── 观察者暴露 ───────────────────────────────────────────
+
+	// TickerObserver 获取行情观察者
+	TickerObserver() *listener.StreamObserver[models.Ticker]
+
+	// AccountObserver 获取账户观察者
+	AccountObserver() *listener.StreamObserver[models.Account]
+
+	// PositionObserver 获取持仓观察者
+	PositionObserver() *listener.StreamObserver[models.Position]
 }

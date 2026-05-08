@@ -147,6 +147,18 @@ func (s *Stream) UnsubscribePosition(instId string, id listener.HandlerID) {
 	s.positionObserver.Unsubscribe(id)
 }
 
+func (s *Stream) TickerObserver() *listener.StreamObserver[models.Ticker] {
+	return s.tickerObserver
+}
+
+func (s *Stream) AccountObserver() *listener.StreamObserver[models.Account] {
+	return s.accountObserver
+}
+
+func (s *Stream) PositionObserver() *listener.StreamObserver[models.Position] {
+	return s.positionObserver
+}
+
 // ─── 消息处理 ──────────────────────────────────────────────────
 
 func (s *Stream) handlePublicMsg(msg []byte) {
