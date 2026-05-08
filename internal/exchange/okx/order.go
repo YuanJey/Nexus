@@ -334,6 +334,42 @@ func NewCancelByClOrdId(instId, clOrdId string) *Cancel {
 }
 
 // ──────────────────────────────────────────
+// 策略委托 (Algo Orders) 内部结构
+// ──────────────────────────────────────────
+
+type AlgoOrder struct {
+	InstId          string  `json:"instId"`
+	TdMode          string  `json:"tdMode"`
+	Side            Side    `json:"side"`
+	PosSide         PosSide `json:"posSide"`
+	OrdType         string  `json:"ordType"` // conditional, oco, trigger, move_order_stop
+	Sz              string  `json:"sz"`
+	ReduceOnly      bool    `json:"reduceOnly"`
+	AlgoClOrdId     string  `json:"algoClOrdId"`
+	TpTriggerPx     string  `json:"tpTriggerPx,omitempty"`
+	TpOrdPx         string  `json:"tpOrdPx,omitempty"`
+	TpTriggerPxType string  `json:"tpTriggerPxType,omitempty"`
+	SlTriggerPx     string  `json:"slTriggerPx,omitempty"`
+	SlOrdPx         string  `json:"slOrdPx,omitempty"`
+	SlTriggerPxType string  `json:"slTriggerPxType,omitempty"`
+	TriggerPx       string  `json:"triggerPx,omitempty"`
+	TriggerPxType   string  `json:"triggerPxType,omitempty"`
+	OrderPx         string  `json:"orderPx,omitempty"`
+}
+
+type CancelAlgo struct {
+	InstId string `json:"instId"`
+	AlgoId string `json:"algoId"`
+}
+
+// okxAlgoPendingItem 策略挂单条目
+type okxAlgoPendingItem struct {
+	InstId      string `json:"instId"`
+	AlgoId      string `json:"algoId"`
+	AlgoClOrdId string `json:"algoClOrdId"`
+}
+
+// ──────────────────────────────────────────
 // Resp OKX 通用响应
 // ──────────────────────────────────────────
 

@@ -53,19 +53,28 @@ type Execution interface {
 	// OrdId 与 ClOrdId 必须提供其中一个
 	CancelOrders(ctx context.Context, orders []models.CancelOrderReq) error
 
-	// CancelAllOrders 撤销指定产品所有挂单（instId 为空则撤全账户）
+	// CancelAllOrders 撤销指定产品所有普通挂单（instId 为空则撤全账户）
 	CancelAllOrders(ctx context.Context, instId string) error
+
+	// ─── 策略委托 (Algo Orders / TP/SL) ─────────────────────────
+
+	// PlaceAlgoOrders 批量下单策略单（如独立止盈止损、触发单）
+	PlaceAlgoOrders(ctx context.Context, orders []models.PlaceAlgoOrderReq) error
+
+	// AmendAlgoOrders 批量修改策略单
+	AmendAlgoOrders(ctx context.Context, orders []models.AmendAlgoOrderReq) error
+
+	// CancelAlgoOrders 批量撤销策略单
+	CancelAlgoOrders(ctx context.Context, orders []models.CancelAlgoOrderReq) error
+
+	// CancelAllAlgoOrders 撤销指定产品所有策略委托（instId 为空则撤全账户）
+	CancelAllAlgoOrders(ctx context.Context, instId string) error
 
 	// ─── 订单状态订阅（异步双闭环）────────────────────────────
 
-	// Observer 返回订单事件观察者，供策略层注册回调
-	//
-	// 持久监听（策略层风控/统计）：
-	//   exec.Observer().OnOrder(common.OrderEventFilled, handler)
-	//
-	// 一次性监听（下单/改单/撤单后注册，触发后自动注销）：
-	//   exec.Observer().OnceOrder(clOrdId, common.OrderEventFilled, handler)
-	Observer() *listener.OrderObserver[*models.OrderUpdate]
+	// Observer 返回订单事件观察者
+	// 支持监听普通单 (*models.OrderUpdate) 和 策略单 (*models.AlgoUpdate)
+	Observer() *listener.OrderObserver[listener.Identifiable]
 
 	// ─── 查询（对账补偿）─────────────────────────────────────
 

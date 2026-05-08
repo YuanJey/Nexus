@@ -120,6 +120,49 @@ func toOKXCancel(r models.CancelOrderReq) Cancel {
 	return c
 }
 
+// toOKXAlgoOrder 将标准策略单请求转换为 OKX AlgoOrder 结构
+func toOKXAlgoOrder(r models.PlaceAlgoOrderReq) AlgoOrder {
+	return AlgoOrder{
+		InstId:          r.InstId,
+		TdMode:          string(r.MarginMode),
+		Side:            Side(r.Side),
+		PosSide:         PosSide(r.PosSide),
+		OrdType:         string(r.OrdType),
+		Sz:              r.Sz,
+		ReduceOnly:      r.ReduceOnly,
+		AlgoClOrdId:     r.ClOrdId,
+		TpTriggerPx:     r.TpTriggerPx,
+		TpOrdPx:         r.TpOrdPx,
+		TpTriggerPxType: string(r.TpTriggerPxType),
+		SlTriggerPx:     r.SlTriggerPx,
+		SlOrdPx:         r.SlOrdPx,
+		SlTriggerPxType: string(r.SlTriggerPxType),
+		TriggerPx:       r.TriggerPx,
+		TriggerPxType:   string(r.TriggerPxType),
+		OrderPx:         r.OrderPx,
+	}
+}
+
+// toOKXCancelAlgo 将标准策略撤单请求转换为 OKX CancelAlgo 结构
+func toOKXCancelAlgo(r models.CancelAlgoOrderReq) CancelAlgo {
+	return CancelAlgo{
+		InstId: r.InstId,
+		AlgoId: r.AlgoId,
+	}
+}
+
+// toCancelAlgoOrderReqs 辅助函数：内部挂单列表 -> 标准撤单请求列表
+func toCancelAlgoOrderReqs(items []okxAlgoPendingItem) []models.CancelAlgoOrderReq {
+	reqs := make([]models.CancelAlgoOrderReq, 0, len(items))
+	for _, item := range items {
+		reqs = append(reqs, models.CancelAlgoOrderReq{
+			InstId: item.InstId,
+			AlgoId: item.AlgoId,
+		})
+	}
+	return reqs
+}
+
 // toOrderUpdate 将 OKX 订单详情转换为标准 OrderUpdate
 func toOrderUpdate(d okxOrderDetail) *models.OrderUpdate {
 	return &models.OrderUpdate{

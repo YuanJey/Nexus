@@ -44,7 +44,7 @@ func New(cfg Config) *Client {
 	switch cfg.Exchange {
 	case OKX:
 		c.Execution = okx.NewExecutor(cfg.APIKey, cfg.SecretKey, cfg.Passphrase, cfg.Simulated)
-		// Stream 后续实现后在此初始化
+		c.Stream = okx.NewStream(cfg.APIKey, cfg.SecretKey, cfg.Passphrase, cfg.Simulated)
 	}
 	return c
 }

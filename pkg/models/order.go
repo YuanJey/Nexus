@@ -141,5 +141,76 @@ type OrderUpdate struct {
 	UpdateAt int64  // 更新时间戳（ms）
 }
 
-// GetClOrdId 实现 common.Identifiable，供 OrderObserver 路由
+// GetClOrdId 实现 listener.Identifiable，供 OrderObserver 路由
 func (o *OrderUpdate) GetClOrdId() string { return o.ClOrdId }
+
+// ══════════════════════════════════════════════════════════════
+// 策略委托请求模型 (Algo Orders)
+// ══════════════════════════════════════════════════════════════
+
+// AlgoOrdType 策略单类型
+type AlgoOrdType string
+
+const (
+	AlgoConditional AlgoOrdType = "conditional" // 止盈止损单
+	AlgoTrigger     AlgoOrdType = "trigger"     // 触发单
+	AlgoOCO         AlgoOrdType = "oco"         // OCO 订单
+)
+
+// PlaceAlgoOrderReq 策略委托下单请求
+type PlaceAlgoOrderReq struct {
+	InstId     string      // 产品 ID
+	MarginMode MarginMode  // 逐仓/全仓
+	Side       OrderSide   // buy / sell
+	PosSide    PosSide     // long / short
+	OrdType    AlgoOrdType // conditional / trigger
+	Sz         string      // 委托数量
+	ReduceOnly bool        // 是否只减仓
+	ClOrdId    string      // 客户自定义策略 ID（对应 OKX 的 algoClOrdId）
+
+	// 止盈相关
+	TpTriggerPx     string
+	TpOrdPx         string
+	TpTriggerPxType TriggerPxType
+
+	// 止损相关
+	SlTriggerPx     string
+	SlOrdPx         string
+	SlTriggerPxType TriggerPxType
+
+	// 触发单相关 (Trigger Order)
+	TriggerPx     string
+	TriggerPxType TriggerPxType
+	OrderPx       string // 触发后的委托价（"-1" 为市价）
+}
+
+// AmendAlgoOrderReq 策略委托改单请求
+type AmendAlgoOrderReq struct {
+	InstId      string // 产品 ID
+	AlgoId      string // 平台分配的策略 ID（与 AlgoClOrdId 二选一）
+	AlgoClOrdId string // 客户自定义 ID
+	NewSz       string // 新数量
+
+	NewTpTriggerPx string
+	NewTpOrdPx     string
+	NewSlTriggerPx string
+	NewSlOrdPx     string
+}
+
+// CancelAlgoOrderReq 策略委托撤单请求
+type CancelAlgoOrderReq struct {
+	InstId string // 产品 ID
+	AlgoId string // 平台分配的策略 ID
+}
+
+// AlgoUpdate 策略委托状态推送（对应 OKX 的订单/策略推送转换后）
+type AlgoUpdate struct {
+	AlgoId      string
+	AlgoClOrdId string
+	InstId      string
+	State       string // effective / canceled / order_failed / ...
+	UpdateAt    int64
+}
+
+// GetClOrdId 实现 listener.Identifiable
+func (a *AlgoUpdate) GetClOrdId() string { return a.AlgoClOrdId }

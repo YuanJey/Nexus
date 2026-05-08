@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
+
+	logger "github.com/YuanJey/go-log/pkg/log"
 
 	"github.com/YuanJey/nexus/pkg/listener"
 	"github.com/YuanJey/nexus/pkg/models"
@@ -11,36 +15,77 @@ import (
 
 // ──────────────────────────────────────────────────────────────
 // Executor 实现 execution.Execution 接口
-// 当前：HTTP 全量实现；WS 通道预留（通过 ws.SendMsg 扩展）
 // ──────────────────────────────────────────────────────────────
 
 type Executor struct {
 	http     *httpClient
-	ws       *wsClient
-	observer *listener.OrderObserver[*models.OrderUpdate]
+	ws       *wsClient // Private channel (orders)
+	bizWs    *wsClient // Business channel (orders-algo)
+	observer *listener.OrderObserver[listener.Identifiable]
 }
 
 // NewExecutor 创建 OKX 执行器
 func NewExecutor(apiKey, secretKey, passphrase string, simulated bool) *Executor {
-	return &Executor{
-		http:     newHTTPClient(apiKey, secretKey, passphrase, simulated),
-		ws:       newWSClient(),
-		observer: listener.NewOrderObserver[*models.OrderUpdate](),
+	priUrl := "wss://ws.okx.com:8443/ws/v5/private"
+	bizUrl := "wss://ws.okx.com:8443/ws/v5/business"
+	if simulated {
+		priUrl = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+		bizUrl = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
 	}
+
+	e := &Executor{
+		http:     newHTTPClient(apiKey, secretKey, passphrase, simulated),
+		observer: listener.NewOrderObserver[listener.Identifiable](),
+	}
+
+	e.ws = newWSClient(priUrl, e.handleWsMsg)
+	e.ws.setAuth(apiKey, secretKey, passphrase)
+
+	e.bizWs = newWSClient(bizUrl, e.handleWsMsg)
+	e.bizWs.setAuth(apiKey, secretKey, passphrase)
+
+	return e
 }
 
 // ─── 生命周期 ─────────────────────────────────────────────────
 
 func (e *Executor) Start(ctx context.Context) error {
-	// TODO: 启动 WS，当前仅阻塞等待 ctx 取消
-	return e.ws.Start(ctx)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		go func() {
+			if err := e.ws.Start(ctx); err != nil {
+				logger.NewError("", fmt.Sprintf("Private WS error: %v", err))
+			}
+		}()
+		time.Sleep(2 * time.Second)
+		e.ws.Subscribe([]map[string]string{{"channel": "orders", "instType": "ANY"}})
+	}()
+
+	go func() {
+		defer wg.Done()
+		go func() {
+			if err := e.bizWs.Start(ctx); err != nil {
+				logger.NewError("", fmt.Sprintf("Business WS error: %v", err))
+			}
+		}()
+		time.Sleep(2 * time.Second)
+		e.bizWs.Subscribe([]map[string]string{{"channel": "orders-algo", "instType": "ANY"}})
+	}()
+
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (e *Executor) Stop() error {
-	return e.ws.Stop()
+	_ = e.ws.Stop()
+	_ = e.bizWs.Stop()
+	return nil
 }
 
-// ─── 开仓 ─────────────────────────────────────────────────────
+// ─── 普通订单 (Normal Orders) ─────────────────────────────────
 
 func (e *Executor) PlaceOrders(ctx context.Context, orders []models.PlaceOrderReq) error {
 	okxOrders := make([]Order, 0, len(orders))
@@ -50,12 +95,10 @@ func (e *Executor) PlaceOrders(ctx context.Context, orders []models.PlaceOrderRe
 	return e.batchPlaceOrders(ctx, okxOrders)
 }
 
-// ─── 平仓 ─────────────────────────────────────────────────────
-
 func (e *Executor) CloseOrders(ctx context.Context, orders []models.PlaceOrderReq) error {
 	okxOrders := make([]Order, 0, len(orders))
 	for _, r := range orders {
-		r.ReduceOnly = true // 强制 reduceOnly
+		r.ReduceOnly = true
 		okxOrders = append(okxOrders, toOKXOrder(r))
 	}
 	return e.batchPlaceOrders(ctx, okxOrders)
@@ -70,8 +113,6 @@ func (e *Executor) ClosePositions(ctx context.Context, positions []models.CloseP
 	}
 	return nil
 }
-
-// ─── 改单 ─────────────────────────────────────────────────────
 
 func (e *Executor) AmendOrders(ctx context.Context, orders []models.AmendOrderReq) error {
 	okxOrders := make([]AmendOrder, 0, len(orders))
@@ -89,8 +130,6 @@ func (e *Executor) AmendOrders(ctx context.Context, orders []models.AmendOrderRe
 	}
 	return nil
 }
-
-// ─── 撤单 ─────────────────────────────────────────────────────
 
 func (e *Executor) CancelOrders(ctx context.Context, orders []models.CancelOrderReq) error {
 	okxOrders := make([]Cancel, 0, len(orders))
@@ -110,7 +149,6 @@ func (e *Executor) CancelOrders(ctx context.Context, orders []models.CancelOrder
 }
 
 func (e *Executor) CancelAllOrders(ctx context.Context, instId string) error {
-	// 1. 查询当前所有挂单
 	params := map[string]string{"instType": "SWAP"}
 	if instId != "" {
 		params["instId"] = instId
@@ -128,14 +166,12 @@ func (e *Executor) CancelAllOrders(ctx context.Context, instId string) error {
 		return nil
 	}
 
-	// 2. 构建撤单列表
 	cancels := make([]Cancel, 0, len(pending))
 	for _, p := range pending {
 		id := p.OrdId
 		cancels = append(cancels, Cancel{InstId: p.InstId, OrdId: &id})
 	}
 
-	// 3. 分批撤单
 	for _, batch := range chunk(cancels, MaxBatch) {
 		if _, err := e.http.post(ctx, "/api/v5/trade/cancel-batch-orders", batch); err != nil {
 			return err
@@ -144,9 +180,64 @@ func (e *Executor) CancelAllOrders(ctx context.Context, instId string) error {
 	return nil
 }
 
+// ─── 策略委托 (Algo Orders) ───────────────────────────────────
+
+func (e *Executor) PlaceAlgoOrders(ctx context.Context, orders []models.PlaceAlgoOrderReq) error {
+	// OKX 策略委托目前仅支持单笔接口
+	for _, r := range orders {
+		body := toOKXAlgoOrder(r)
+		if _, err := e.http.post(ctx, "/api/v5/trade/order-algo", body); err != nil {
+			return fmt.Errorf("place algo order %s: %w", r.ClOrdId, err)
+		}
+	}
+	return nil
+}
+
+func (e *Executor) AmendAlgoOrders(ctx context.Context, orders []models.AmendAlgoOrderReq) error {
+	// TODO: 实现 AmendAlgoOrder 的内部结构转换与接口调用
+	// OKX 接口: /api/v5/trade/amend-algos
+	return nil
+}
+
+func (e *Executor) CancelAlgoOrders(ctx context.Context, orders []models.CancelAlgoOrderReq) error {
+	okxCancels := make([]CancelAlgo, 0, len(orders))
+	for _, r := range orders {
+		okxCancels = append(okxCancels, toOKXCancelAlgo(r))
+	}
+	for _, batch := range chunk(okxCancels, MaxBatch) {
+		if _, err := e.http.post(ctx, "/api/v5/trade/cancel-algos", batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Executor) CancelAllAlgoOrders(ctx context.Context, instId string) error {
+	// 1. 查询所有策略挂单
+	params := map[string]string{"instType": "SWAP", "ordType": "conditional"}
+	if instId != "" {
+		params["instId"] = instId
+	}
+	resp, err := e.http.get(ctx, "/api/v5/trade/orders-algo-pending", params)
+	if err != nil {
+		return err
+	}
+
+	var pending []okxAlgoPendingItem
+	if err := json.Unmarshal(resp.Data, &pending); err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	// 2. 批量撤销
+	return e.CancelAlgoOrders(ctx, toCancelAlgoOrderReqs(pending))
+}
+
 // ─── Observer ─────────────────────────────────────────────────
 
-func (e *Executor) Observer() *listener.OrderObserver[*models.OrderUpdate] {
+func (e *Executor) Observer() *listener.OrderObserver[listener.Identifiable] {
 	return e.observer
 }
 
@@ -170,14 +261,13 @@ func (e *Executor) GetOrder(ctx context.Context, instId, clOrdId, ordId string) 
 		return nil, fmt.Errorf("unmarshal order detail: %w", err)
 	}
 	if len(details) == 0 {
-		return nil, fmt.Errorf("order not found: instId=%s clOrdId=%s ordId=%s", instId, clOrdId, ordId)
+		return nil, fmt.Errorf("order not found")
 	}
 	return toOrderUpdate(details[0]), nil
 }
 
 // ─── 内部工具 ─────────────────────────────────────────────────
 
-// batchPlaceOrders 分批调用 batch-orders 接口
 func (e *Executor) batchPlaceOrders(ctx context.Context, orders []Order) error {
 	for _, batch := range chunk(orders, MaxBatch) {
 		resp, err := e.http.post(ctx, "/api/v5/trade/batch-orders", batch)
@@ -191,7 +281,6 @@ func (e *Executor) batchPlaceOrders(ctx context.Context, orders []Order) error {
 	return nil
 }
 
-// checkBatchResult 检查批量操作中是否有单笔失败
 func checkBatchResult(resp *apiResp) error {
 	var items []batchItemResult
 	if err := json.Unmarshal(resp.Data, &items); err != nil {
@@ -203,4 +292,81 @@ func checkBatchResult(resp *apiResp) error {
 		}
 	}
 	return nil
+}
+
+// ─── WebSocket 消息处理 ──────────────────────────────────────────
+
+func (e *Executor) handleWsMsg(msg []byte) {
+	var resp struct {
+		Event string `json:"event"`
+		Code  string `json:"code"`
+		Msg   string `json:"msg"`
+		Arg   struct {
+			Channel string `json:"channel"`
+		} `json:"arg"`
+		Data []json.RawMessage `json:"data"`
+	}
+
+	if err := json.Unmarshal(msg, &resp); err != nil {
+		return
+	}
+
+	if resp.Event != "" {
+		if resp.Event == "error" {
+			logger.NewError("", fmt.Sprintf("⚠️ [WS Error] Code: %s, Msg: %s", resp.Code, resp.Msg))
+		} else {
+			logger.NewInfo("", fmt.Sprintf("ℹ️ [WS Event] %s: channel=%s", resp.Event, resp.Arg.Channel))
+		}
+		return
+	}
+
+	if len(resp.Data) == 0 {
+		return
+	}
+
+	switch resp.Arg.Channel {
+	case "orders":
+		for _, rawData := range resp.Data {
+			var detail okxOrderDetail
+			if err := json.Unmarshal(rawData, &detail); err == nil {
+				update := toOrderUpdate(detail)
+				var identifiable listener.Identifiable = update
+				// 根据订单状态映射到通用 OrderEvent
+				event := listener.OrderEventAll
+				switch detail.State {
+				case "live":
+					event = listener.OrderEventNew
+				case "partially_filled":
+					event = listener.OrderEventPartial
+				case "filled":
+					event = listener.OrderEventFilled
+				case "canceled":
+					event = listener.OrderEventCanceled
+				}
+				e.observer.Dispatch(event, &identifiable)
+			}
+		}
+	case "orders-algo":
+		type okxAlgoUpdateMsg struct {
+			AlgoId      string `json:"algoId"`
+			AlgoClOrdId string `json:"algoClOrdId"`
+			InstId      string `json:"instId"`
+			State       string `json:"state"`
+			UTime       int64  `json:"uTime,string"`
+		}
+		for _, rawData := range resp.Data {
+			var detail okxAlgoUpdateMsg
+			if err := json.Unmarshal(rawData, &detail); err == nil {
+				update := &models.AlgoUpdate{
+					AlgoId:      detail.AlgoId,
+					AlgoClOrdId: detail.AlgoClOrdId,
+					InstId:      detail.InstId,
+					State:       detail.State,
+					UpdateAt:    detail.UTime,
+				}
+				var identifiable listener.Identifiable = update
+				e.observer.Dispatch(listener.OrderEventAll, &identifiable)
+			}
+		}
+	}
 }
