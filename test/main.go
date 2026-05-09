@@ -29,7 +29,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx, rootOpID := utils.GenOperationID(ctx)
 	defer cancel()
-
+	getOHLCV(ctx, sdk, "ETH-USDT-SWAP")
 	// 启动 WebSocket 监听（执行层：订单私有频道）
 	go func() {
 		logger.NewInfo("", "📡 启动 Execution 私有频道监听...")
@@ -260,4 +260,13 @@ func loadEnv(path string) map[string]string {
 		env[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 	}
 	return env
+}
+
+func getOHLCV(ctx context.Context, sdk *nexus.Client, instId string) {
+	data, err := sdk.Execution.GetOHLCV(ctx, instId, "1m", 10)
+	if err != nil {
+		logger.NewError("", fmt.Sprintf("❌ 获取 K 线数据失败: %v", err))
+	} else {
+		logger.NewInfo("", fmt.Sprintf("✅ 获取 K 线数据成功: %v", data))
+	}
 }

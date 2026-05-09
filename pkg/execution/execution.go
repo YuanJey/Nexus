@@ -80,4 +80,6 @@ type Execution interface {
 
 	// GetOrder 查询单笔订单（优先用 clOrdId，ordId 可为空）
 	GetOrder(ctx context.Context, instId, clOrdId, ordId string) (*models.OrderUpdate, error)
+
+	GetOHLCV(ctx context.Context, instId string, timeframe string, limit int) ([]models.Candle, error)
 }

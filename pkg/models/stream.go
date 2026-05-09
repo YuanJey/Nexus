@@ -48,3 +48,16 @@ type Position struct {
 	Margin   string  // 保证金
 	Ts       int64   // 时间戳（ms）
 }
+
+// Candle K 线数据
+type Candle struct {
+	Ts          int64   `json:"ts"` // 开始时间（单位：毫秒）
+	Open        float64 `json:"o"`
+	High        float64 `json:"h"`
+	Low         float64 `json:"l"`
+	Close       float64 `json:"c"`
+	Volume      float64 `json:"v"`           // 成交张数 (vol)
+	VolCcy      float64 `json:"volCcy"`      // 成交量 (币)
+	VolCcyQuote float64 `json:"volCcyQuote"` // 成交额 (计价币)
+	Confirm     int     `json:"confirm"`     // 是否确认 (0/1)
+}

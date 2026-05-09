@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -264,6 +265,54 @@ func (e *Executor) GetOrder(ctx context.Context, instId, clOrdId, ordId string) 
 		return nil, fmt.Errorf("order not found")
 	}
 	return toOrderUpdate(details[0]), nil
+}
+
+func (e *Executor) GetOHLCV(ctx context.Context, instId string, timeframe string, limit int) ([]models.Candle, error) {
+	params := map[string]string{
+		"instId": instId,
+		"bar":    timeframe,
+	}
+	if limit > 0 {
+		params["limit"] = strconv.Itoa(limit)
+	}
+
+	resp, err := e.http.get(ctx, "/api/v5/market/candles", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var data [][]string
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return nil, fmt.Errorf("unmarshal candles: %w", err)
+	}
+
+	result := make([]models.Candle, len(data))
+	for i := range data {
+		row := data[len(data)-1-i] // 正序
+
+		c := models.Candle{}
+		c.Ts, _ = strconv.ParseInt(row[0], 10, 64)
+		c.Open, _ = strconv.ParseFloat(row[1], 64)
+		c.High, _ = strconv.ParseFloat(row[2], 64)
+		c.Low, _ = strconv.ParseFloat(row[3], 64)
+		c.Close, _ = strconv.ParseFloat(row[4], 64)
+		c.Volume, _ = strconv.ParseFloat(row[5], 64)
+
+		if len(row) > 6 {
+			c.VolCcy, _ = strconv.ParseFloat(row[6], 64)
+		}
+		if len(row) > 7 {
+			c.VolCcyQuote, _ = strconv.ParseFloat(row[7], 64)
+		}
+		if len(row) > 8 {
+			conf, _ := strconv.Atoi(row[8])
+			c.Confirm = conf
+		}
+
+		result[i] = c
+	}
+
+	return result, nil
 }
 
 // ─── 内部工具 ─────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 package okx
 
 import (
+	"strconv"
+
 	"github.com/YuanJey/nexus/pkg/models"
 )
 
@@ -166,18 +168,24 @@ func toCancelAlgoOrderReqs(items []okxAlgoPendingItem) []models.CancelAlgoOrderR
 // toOrderUpdate 将 OKX 订单详情转换为标准 OrderUpdate
 func toOrderUpdate(d okxOrderDetail) *models.OrderUpdate {
 	return &models.OrderUpdate{
-		ClOrdId: d.ClOrdId,
-		OrdId:   d.OrdId,
-		InstId:  d.InstId,
-		Side:    models.OrderSide(d.Side),
-		PosSide: models.PosSide(d.PosSide),
-		OrdType: models.OrderType(d.OrdType),
-		State:   d.State,
-		Sz:      d.Sz,
-		FillSz:  d.FillSz,
-		Px:      d.Px,
-		AvgPx:   d.AvgPx,
-		Pnl:     d.Pnl,
-		Fee:     d.Fee,
+		ClOrdId:  d.ClOrdId,
+		OrdId:    d.OrdId,
+		InstId:   d.InstId,
+		Side:     models.OrderSide(d.Side),
+		PosSide:  models.PosSide(d.PosSide),
+		OrdType:  models.OrderType(d.OrdType),
+		State:    d.State,
+		Sz:       d.Sz,
+		FillSz:   d.FillSz,
+		Px:       d.Px,
+		AvgPx:    d.AvgPx,
+		Pnl:      d.Pnl,
+		Fee:      d.Fee,
+		UpdateAt: parseUnixMs(d.UTime),
 	}
+}
+
+func parseUnixMs(s string) int64 {
+	v, _ := strconv.ParseInt(s, 10, 64)
+	return v
 }
