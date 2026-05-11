@@ -7,7 +7,7 @@ import (
 	"github.com/YuanJey/nexus/pkg/modules"
 )
 
-// Modules 聚合 4 个模块，共享底层连接
+// Modules 聚合模块集合，按需创建
 type Modules struct {
 	Market   modules.MarketModule
 	Account  modules.AccountModule
@@ -17,15 +17,39 @@ type Modules struct {
 	wsClients []*wsClient
 }
 
-// NewModules 创建共享连接的模块集合
+// ─── ModuleOption ───────────────────────────────────────────────
+
+type moduleOptions struct {
+	market   bool
+	account  bool
+	position bool
+	trading  bool
+}
+
+// ModuleOption 模块启用选项
+type ModuleOption func(*moduleOptions)
+
+func WithMarket(v bool) ModuleOption   { return func(o *moduleOptions) { o.market = v } }
+func WithAccount(v bool) ModuleOption  { return func(o *moduleOptions) { o.account = v } }
+func WithPosition(v bool) ModuleOption { return func(o *moduleOptions) { o.position = v } }
+func WithTrading(v bool) ModuleOption  { return func(o *moduleOptions) { o.trading = v } }
+
+// NewModules 创建模块集合
 //
-//	WS 连接: 1 public + 2 private + 1 business = 4 条
-//	pubWs  → MarketModule (tickers)
-//	priWs1 → AccountModule (account) + PositionModule (positions)
-//	priWs2 → TradingModule (orders)
-//	bizWs  → TradingModule (orders-algo)
-func NewModules(apiKey, secretKey, passphrase string, simulated bool) *Modules {
-	http := newHTTPClient(apiKey, secretKey, passphrase, simulated)
+//	默认启用全部 4 个模块，可通过 ModuleOption 按需关闭：
+//	  NewModules(key, secret, pass, sim, WithPosition(false))
+func NewModules(apiKey, secretKey, passphrase string, simulated bool, opts ...ModuleOption) *Modules {
+	o := moduleOptions{market: true, account: true, position: true, trading: true}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	needPrivate := o.account || o.position || o.trading
+
+	var http *httpClient
+	if needPrivate {
+		http = newHTTPClient(apiKey, secretKey, passphrase, simulated)
+	}
 
 	pubURL := "wss://ws.okx.com:8443/ws/v5/public"
 	priURL := "wss://ws.okx.com:8443/ws/v5/private"
@@ -36,24 +60,43 @@ func NewModules(apiKey, secretKey, passphrase string, simulated bool) *Modules {
 		bizURL = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
 	}
 
-	pubWs := newWSClient(pubURL)
+	var wsClients []*wsClient
+	m := &Modules{}
 
-	priWs1 := newWSClient(priURL)
-	priWs1.setAuth(apiKey, secretKey, passphrase)
-
-	priWs2 := newWSClient(priURL)
-	priWs2.setAuth(apiKey, secretKey, passphrase)
-
-	bizWs := newWSClient(bizURL)
-	bizWs.setAuth(apiKey, secretKey, passphrase)
-
-	return &Modules{
-		Market:    newMarketModule(http, pubWs),
-		Account:   newAccountModule(http, priWs1),
-		Position:  newPositionModule(http, priWs1),
-		Trading:   newTradingModule(http, priWs2, bizWs),
-		wsClients: []*wsClient{pubWs, priWs1, priWs2, bizWs},
+	// Market — public WS
+	if o.market {
+		pubWs := newWSClient(pubURL)
+		m.Market = newMarketModule(http, pubWs)
+		wsClients = append(wsClients, pubWs)
 	}
+
+	// Account / Position — 共享一条 private WS
+	if o.account || o.position {
+		priWs1 := newWSClient(priURL)
+		priWs1.setAuth(apiKey, secretKey, passphrase)
+		if o.account {
+			m.Account = newAccountModule(http, priWs1)
+		}
+		if o.position {
+			m.Position = newPositionModule(http, priWs1)
+		}
+		wsClients = append(wsClients, priWs1)
+	}
+
+	// Trading — private WS (orders) + business WS (orders-algo)
+	if o.trading {
+		priWs2 := newWSClient(priURL)
+		priWs2.setAuth(apiKey, secretKey, passphrase)
+
+		bizWs := newWSClient(bizURL)
+		bizWs.setAuth(apiKey, secretKey, passphrase)
+
+		m.Trading = newTradingModule(http, priWs2, bizWs)
+		wsClients = append(wsClients, priWs2, bizWs)
+	}
+
+	m.wsClients = wsClients
+	return m
 }
 
 // Ready 返回一个 channel，在所有 WS 连接就绪后关闭
