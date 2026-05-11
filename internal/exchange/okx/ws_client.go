@@ -2,6 +2,7 @@ package okx
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -21,18 +22,40 @@ type wsClient struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
 
-	handler func([]byte)
-	done    chan struct{}
+	channelHandlers map[string]func([]byte)
+	done            chan struct{}
+	stopOnce        sync.Once
+
+	ready     chan struct{}
+	readyOnce sync.Once
 
 	subscriptions []map[string]string
 }
 
+func (w *wsClient) Ready() <-chan struct{} {
+	return w.ready
+}
+
+func (w *wsClient) signalReady() {
+	w.readyOnce.Do(func() {
+		close(w.ready)
+	})
+}
+
+// OnChannel 注册频道消息处理器
+func (w *wsClient) OnChannel(channel string, handler func([]byte)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.channelHandlers[channel] = handler
+}
+
 // newWSClient 创建 WebSocket 客户端
-func newWSClient(url string, handler func([]byte)) *wsClient {
+func newWSClient(url string) *wsClient {
 	return &wsClient{
-		url:     url,
-		handler: handler,
-		done:    make(chan struct{}),
+		url:             url,
+		channelHandlers: make(map[string]func([]byte)),
+		done:            make(chan struct{}),
+		ready:           make(chan struct{}),
 	}
 }
 
@@ -65,12 +88,22 @@ func (w *wsClient) Start(ctx context.Context) error {
 	maxBackoff := 60 * time.Second
 
 	for {
+		select {
+		case <-w.done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		err := w.connect(ctx)
 		if err != nil {
 			logger.NewError("", fmt.Sprintf("WS connect failed: %v, retrying in %v...", err, backoff))
 		} else {
 			// 如果 connect 返回 nil，说明是正常关闭或 ctx done
 			select {
+			case <-w.done:
+				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
@@ -80,6 +113,8 @@ func (w *wsClient) Start(ctx context.Context) error {
 		}
 
 		select {
+		case <-w.done:
+			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(backoff):
@@ -99,7 +134,7 @@ func (w *wsClient) connect(ctx context.Context) error {
 	w.mu.Lock()
 	w.conn = conn
 	w.mu.Unlock()
-	defer w.Stop()
+	defer w.cleanupConn()
 
 	// 1. 登录 (私有频道)
 	if w.apiKey != "" {
@@ -118,6 +153,9 @@ func (w *wsClient) connect(ctx context.Context) error {
 	}
 	w.mu.Unlock()
 
+	// 通知连接已就绪
+	w.signalReady()
+
 	// 3. 启动读写循环
 	readCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -129,11 +167,21 @@ func (w *wsClient) connect(ctx context.Context) error {
 }
 
 func (w *wsClient) Stop() error {
+	w.stopOnce.Do(func() {
+		close(w.done)
+	})
+	return w.cleanupConn()
+}
+
+func (w *wsClient) cleanupConn() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	close(w.done)
+	w.readyOnce = sync.Once{}
+	w.ready = make(chan struct{})
 	if w.conn != nil {
-		return w.conn.Close()
+		err := w.conn.Close()
+		w.conn = nil
+		return err
 	}
 	return nil
 }
@@ -199,13 +247,25 @@ func (w *wsClient) readLoop(ctx context.Context) error {
 			return err
 		}
 
-		if string(msg) == "pong" {
-			continue
-		}
+		w.routeMsg(msg)
+	}
+}
 
-		if w.handler != nil {
-			w.handler(msg)
-		}
+// routeMsg 解析 arg.channel 字段，路由到已注册的处理器
+func (w *wsClient) routeMsg(msg []byte) {
+	var envelope struct {
+		Arg struct {
+			Channel string `json:"channel"`
+		} `json:"arg"`
+	}
+	if err := json.Unmarshal(msg, &envelope); err != nil {
+		return
+	}
+	w.mu.Lock()
+	h, ok := w.channelHandlers[envelope.Arg.Channel]
+	w.mu.Unlock()
+	if ok {
+		h(msg)
 	}
 }
 
@@ -222,7 +282,7 @@ func (w *wsClient) pingLoop(ctx context.Context) {
 		case <-ticker.C:
 			w.mu.Lock()
 			if w.conn != nil {
-				_ = w.conn.WriteMessage(websocket.TextMessage, []byte("ping"))
+				_ = w.conn.WriteMessage(websocket.PingMessage, nil)
 			}
 			w.mu.Unlock()
 		}

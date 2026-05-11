@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -97,20 +98,15 @@ func (c *httpClient) post(ctx context.Context, path string, body any) (*apiResp,
 
 func (c *httpClient) get(ctx context.Context, path string, params map[string]string) (*apiResp, error) {
 	if len(params) > 0 {
-		var sb strings.Builder
-		sb.WriteString(path)
-		sb.WriteByte('?')
-		first := true
-		for k, v := range params {
-			if !first {
-				sb.WriteByte('&')
+		u, err := url.Parse(path)
+		if err == nil {
+			q := u.Query()
+			for k, v := range params {
+				q.Set(k, v)
 			}
-			sb.WriteString(k)
-			sb.WriteByte('=')
-			sb.WriteString(v)
-			first = false
+			u.RawQuery = q.Encode()
+			path = u.String()
 		}
-		path = sb.String()
 	}
 	return c.do(ctx, http.MethodGet, path, nil)
 }
@@ -170,7 +166,11 @@ func (c *httpClient) do(ctx context.Context, method, path string, body any) (*ap
 
 // chunk 分批工具
 func chunk[T any](s []T, size int) [][]T {
-	var out [][]T
+	if len(s) == 0 {
+		return nil
+	}
+	numChunks := (len(s) + size - 1) / size
+	out := make([][]T, 0, numChunks)
 	for len(s) > 0 {
 		n := size
 		if n > len(s) {

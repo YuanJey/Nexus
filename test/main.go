@@ -12,10 +12,60 @@ import (
 	utils2 "github.com/YuanJey/nexus/utils"
 
 	nexus "github.com/YuanJey/nexus/pkg/client"
-	"github.com/YuanJey/nexus/pkg/listener"
 	"github.com/YuanJey/nexus/pkg/models"
+	"github.com/YuanJey/nexus/pkg/modules"
 	"github.com/YuanJey/nexus/pkg/utils"
 )
+
+// ─── 测试用 Listener 实现 ──────────────────────────────────────────
+
+type testTickerListener struct {
+	rootOpID string
+}
+
+func (l *testTickerListener) OnTicker(t *models.Ticker) {
+	logger.NewInfo(l.rootOpID, fmt.Sprintf("📊 行情更新: 产品=%s, 收盘价=%s", t.InstId, t.Last))
+}
+
+type testAccountListener struct {
+	rootOpID string
+}
+
+func (l *testAccountListener) OnAccount(acc *models.Account) {
+	logger.NewInfo(l.rootOpID, fmt.Sprintf("💰 账户更新: 总权益=%s USD", acc.TotalEq))
+}
+
+type testAuditAccountListener struct {
+	rootOpID string
+}
+
+func (l *testAuditAccountListener) OnAccount(acc *models.Account) {
+	logger.NewInfo(l.rootOpID, fmt.Sprintf("💰 [Audit] 资产对账完成，Ts=%d", acc.Ts))
+}
+
+type testPositionListener struct {
+	rootOpID string
+}
+
+func (l *testPositionListener) OnPosition(pos *models.Position) {
+	logger.NewInfo(l.rootOpID, fmt.Sprintf("📊 持仓更新: 产品=%s, 方向=%s, 仓位=%s", pos.InstId, pos.PosSide, pos.Pos))
+}
+
+type testOrderListener struct{}
+
+func (l *testOrderListener) OnOrder(update *models.OrderUpdate) {
+	logger.NewInfo("", fmt.Sprintf("🔔 普通单更新: 自定义ID=%s, 平台ID=%s, 状态=%s, 价格=%s, 数量=%s/%s",
+		update.ClOrdId, update.OrdId, update.State, update.FillPx, update.FillSz, update.Sz))
+}
+
+type testAlgoOrderListener struct{}
+
+func (l *testAlgoOrderListener) OnAlgoOrder(update *models.AlgoUpdate) {
+	logger.NewInfo("", fmt.Sprintf("🔔 策略单更新: 自定义ID=%s, 平台ID=%s, 状态=%s",
+		update.AlgoClOrdId, update.AlgoId, update.State))
+}
+
+// ─── main ─────────────────────────────────────────────────────────
 
 func main() {
 	env := loadEnv(".env")
@@ -30,82 +80,52 @@ func main() {
 	ctx, rootOpID := utils.GenOperationID(ctx)
 	defer cancel()
 	getOHLCV(ctx, sdk, "ETH-USDT-SWAP")
-	// 启动 WebSocket 监听（执行层：订单私有频道）
+
+	// 启动 WebSocket 连接
 	go func() {
-		logger.NewInfo("", "📡 启动 Execution 私有频道监听...")
-		if err := sdk.Execution.Start(ctx); err != nil {
-			logger.NewError("", fmt.Sprintf("❌ Execution 监听器异常退出: %v", err))
+		logger.NewInfo("", "📡 启动所有 WebSocket 监听...")
+		if err := sdk.Start(ctx); err != nil {
+			logger.NewError("", fmt.Sprintf("❌ 监听器异常退出: %v", err))
 		}
 	}()
 
-	// 启动 Stream 监听（行情、账户、持仓频道）
-	go func() {
-		logger.NewInfo("", "📡 启动 Stream 行情/账户/持仓监听...")
-		if err := sdk.Stream.Start(ctx); err != nil {
-			logger.NewError("", fmt.Sprintf("❌ Stream 监听器异常退出: %v", err))
-		}
-	}()
-
-	// 等待连接建立和订阅生效
-	time.Sleep(4 * time.Second)
+	// 等待所有 WS 连接就绪（登录+恢复订阅完成）
+	<-sdk.Ready()
 
 	instId := "ETH-USDT-SWAP"
 
 	logger.NewInfo(rootOpID, fmt.Sprintf("🔧 初始化测试: 交易所=OKX, 模拟盘=%v\n", env["OKX_SIMULATED"]))
 
-	// 1. 注入账户更新监听（多点注入示例）
-	sdk.Stream.AccountObserver().Subscribe(func(acc *models.Account) {
-		logger.NewInfo(rootOpID, fmt.Sprintf("💰 [OBSERVER-1] 账户更新: 总权益=%s USD\n", acc.TotalEq))
-	})
-	sdk.Stream.AccountObserver().Subscribe(func(acc *models.Account) {
-		// 模拟另一个系统的审计日志
-		logger.NewInfo(rootOpID, fmt.Sprintf("💰 [OBSERVER-2/Audit] 资产对账完成，Ts=%d\n", acc.Ts))
-	})
+	// 1. 注入账户更新监听
+	sdk.Account.AttachAccount(&testAccountListener{rootOpID: rootOpID})
+	sdk.Account.AttachAccount(&testAuditAccountListener{rootOpID: rootOpID})
 
 	// 2. 注入持仓更新监听
-	sdk.Stream.PositionObserver().Subscribe(func(pos *models.Position) {
-		logger.NewInfo(rootOpID, fmt.Sprintf("📊 [OBSERVER] 持仓更新: 产品=%s, 方向=%s, 仓位=%s\n", pos.InstId, pos.PosSide, pos.Pos))
-	})
+	sdk.Position.AttachPosition(instId, &testPositionListener{rootOpID: rootOpID})
 
 	// 3. 注入行情监听
-	sdk.Stream.TickerObserver().Subscribe(func(t *models.Ticker) {
-		// 仅作为调试输出
-	})
+	sdk.Market.AttachTicker(instId, &testTickerListener{rootOpID: rootOpID})
 
-	// 触发订阅逻辑（通过旧的 API 触发，或者直接在 Observer 模式下自动按需触发）
-	sdk.Stream.SubscribeAccount(func(acc *models.Account) {})
-	sdk.Stream.SubscribePosition(instId, func(pos *models.Position) {})
-	sdk.Stream.SubscribeTicker(instId, func(t *models.Ticker) {})
+	// 4. 注册全局持久订单监听
+	sdk.Trading.AttachOrder(&testOrderListener{})
+	sdk.Trading.AttachAlgoOrder(&testAlgoOrderListener{})
 
-	// 注册全局持久监听
-	sdk.Execution.Observer().OnOrder(listener.OrderEventAll, func(update *listener.Identifiable) {
-		switch o := (*update).(type) {
-		case *models.OrderUpdate:
-			logger.NewInfo("", fmt.Sprintf("🔔 [PERSISTENT] 普通单更新: 自定义ID=%s, 平台ID=%s, 状态=%s, 价格=%s, 数量=%s/%s\n",
-				o.ClOrdId, o.OrdId, o.State, o.FillPx, o.FillSz, o.Sz))
-		case *models.AlgoUpdate:
-			logger.NewInfo("", fmt.Sprintf("🔔 [PERSISTENT] 策略单更新: 自定义ID=%s, 平台ID=%s, 状态=%s\n",
-				o.AlgoClOrdId, o.AlgoId, o.State))
-		}
-	})
-
-	// 1. 普通订单测试 (限价挂单 + 一键全撤)
+	// 1. 普通订单测试
 	testNormalOrders(ctx, sdk, instId)
 
-	// 2. 策略委托测试 (独立止损单 + 策略单全撤)
+	// 2. 策略委托测试
 	testAlgoOrders(ctx, sdk, instId)
 
 	// 3. 一键平仓测试
 	testClosePositions(ctx, sdk, instId)
 
-	// 保持运行一段时间查看异步回调
 	logger.NewInfo(rootOpID, "\n⏳ 等待 5 秒观察后续异步推送...")
 	time.Sleep(5 * time.Second)
 
 	logger.NewInfo(rootOpID, "\n✨ 测试流程结束")
 }
 
-func testNormalOrders(ctx context.Context, sdk *nexus.Client, instId string) {
+func testNormalOrders(ctx context.Context, sdk *nexus.Modules, instId string) {
 	ctx, opID := utils.GenOperationID(ctx)
 	logger.NewInfo(opID, "\n--- [1] 普通订单测试 (Normal Orders) ---")
 
@@ -117,25 +137,18 @@ func testNormalOrders(ctx context.Context, sdk *nexus.Client, instId string) {
 		PosSide:    models.PosSideLong,
 		OrdType:    models.OrderLimit,
 		Sz:         "1",
-		Px:         "1000", // 设低价不成交
+		Px:         "1000",
 		ClOrdId:    clOrdId,
 	}
 
 	logger.NewInfo(opID, fmt.Sprintf("👉 下普通限价单: %s, 价: %s, ID: %s\n", instId, req.Px, clOrdId))
 
-	// 注册一次性监听：监听该订单成交 (filled)
-	sdk.Execution.Observer().OnceOrder(clOrdId, listener.OrderEventFilled, func(update *listener.Identifiable) {
-		o := (*update).(*models.OrderUpdate)
-		logger.NewInfo(opID, fmt.Sprintf("🎯 [ONCE] 订单已成交: ID=%s, 成交均价=%s\n", o.ClOrdId, o.AvgPx))
+	sdk.Trading.OnceOrder(clOrdId, modules.OrderEventFilled, &testOrderListener{
+		// 这里实际上不需要额外字段，OnOrder 已打印
 	})
+	sdk.Trading.OnceOrder(clOrdId, modules.OrderEventCanceled, &testOrderListener{})
 
-	// 注册一次性监听：监听该订单撤单 (canceled)
-	sdk.Execution.Observer().OnceOrder(clOrdId, listener.OrderEventCanceled, func(update *listener.Identifiable) {
-		o := (*update).(*models.OrderUpdate)
-		logger.NewInfo(opID, fmt.Sprintf("🛑 [ONCE] 订单已撤单: ID=%s\n", o.ClOrdId))
-	})
-
-	if err := sdk.Execution.PlaceOrders(ctx, []models.PlaceOrderReq{req}); err != nil {
+	if err := sdk.Trading.PlaceOrders(ctx, []models.PlaceOrderReq{req}); err != nil {
 		logger.NewError(opID, fmt.Sprintf("❌ 下单失败: %v", err))
 	} else {
 		logger.NewInfo(opID, "✅ 下单指令已送出")
@@ -143,14 +156,14 @@ func testNormalOrders(ctx context.Context, sdk *nexus.Client, instId string) {
 
 	time.Sleep(1 * time.Second)
 	logger.NewInfo(opID, "👉 正在全撤当前产品的所有普通挂单...")
-	if err := sdk.Execution.CancelAllOrders(ctx, instId); err != nil {
+	if err := sdk.Trading.CancelAllOrders(ctx, instId); err != nil {
 		logger.NewError(opID, fmt.Sprintf("❌ 全撤失败: %v", err))
 	} else {
 		logger.NewInfo(opID, "✅ 普通挂单已清空")
 	}
 }
 
-func testAlgoOrders(ctx context.Context, sdk *nexus.Client, instId string) {
+func testAlgoOrders(ctx context.Context, sdk *nexus.Modules, instId string) {
 	ctx, opID := utils.GenOperationID(ctx)
 	logger.NewInfo(opID, "\n--- [2] 策略委托测试 (Algo Orders) ---")
 
@@ -170,12 +183,9 @@ func testAlgoOrders(ctx context.Context, sdk *nexus.Client, instId string) {
 
 	logger.NewInfo(opID, fmt.Sprintf("👉 下独立止损策略单: %s, 触发价: %s, ID: %s\n", instId, req.SlTriggerPx, algoClOrdId))
 
-	sdk.Execution.Observer().OnceOrder(algoClOrdId, listener.OrderEventAll, func(update *listener.Identifiable) {
-		a := (*update).(*models.AlgoUpdate)
-		logger.NewInfo(opID, fmt.Sprintf("🎯 [ONCE] 策略单状态变更: ID=%s, 当前状态=%s\n", a.AlgoClOrdId, a.State))
-	})
+	sdk.Trading.OnceAlgoOrder(algoClOrdId, modules.OrderEventAll, &testAlgoOrderListener{})
 
-	if err := sdk.Execution.PlaceAlgoOrders(ctx, []models.PlaceAlgoOrderReq{req}); err != nil {
+	if err := sdk.Trading.PlaceAlgoOrders(ctx, []models.PlaceAlgoOrderReq{req}); err != nil {
 		logger.NewError(opID, fmt.Sprintf("❌ 策略单下单失败: %v", err))
 	} else {
 		logger.NewInfo(opID, "✅ 策略单指令已送出")
@@ -183,14 +193,14 @@ func testAlgoOrders(ctx context.Context, sdk *nexus.Client, instId string) {
 
 	time.Sleep(1 * time.Second)
 	logger.NewInfo(opID, "👉 正在全撤当前产品的所有策略委托...")
-	if err := sdk.Execution.CancelAllAlgoOrders(ctx, instId); err != nil {
+	if err := sdk.Trading.CancelAllAlgoOrders(ctx, instId); err != nil {
 		logger.NewError(opID, fmt.Sprintf("❌ 策略单全撤失败: %v", err))
 	} else {
 		logger.NewInfo(opID, "✅ 策略委托已清空")
 	}
 }
 
-func testClosePositions(ctx context.Context, sdk *nexus.Client, instId string) {
+func testClosePositions(ctx context.Context, sdk *nexus.Modules, instId string) {
 	ctx, opID := utils.GenOperationID(ctx)
 	logger.NewInfo(opID, "\n--- [3] 一键平仓测试 (Market Close) ---")
 	placeOrders(ctx, sdk)
@@ -202,16 +212,16 @@ func testClosePositions(ctx context.Context, sdk *nexus.Client, instId string) {
 	}
 
 	logger.NewInfo(opID, fmt.Sprintf("👉 尝试一键全平多仓: %s\n", instId))
-	if err := sdk.Execution.ClosePositions(ctx, []models.ClosePositionReq{req}); err != nil {
+	if err := sdk.Trading.ClosePositions(ctx, []models.ClosePositionReq{req}); err != nil {
 		logger.NewError(opID, fmt.Sprintf("⚠️ 平仓指令反馈: %v (可能因无持仓报错，属正常)", err))
 	} else {
 		logger.NewInfo(opID, "✅ 平仓指令已发送")
 	}
 }
-func placeOrders(ctx context.Context, sdk *nexus.Client) error {
+
+func placeOrders(ctx context.Context, sdk *nexus.Modules) error {
 	opID := utils.GetOperationID(ctx)
 	clOrdId := utils2.GenerateClOrdId("placeOrderTest")
-	// 1. 下单测试
 	req := models.PlaceOrderReq{
 		InstId:     "ETH-USDT-SWAP",
 		MarginMode: models.MarginCross,
@@ -229,13 +239,9 @@ func placeOrders(ctx context.Context, sdk *nexus.Client) error {
 			SlTriggerPxType: "mark",
 		},
 	}
-	// 注册一次性监听：监听该订单成交 (filled)
-	sdk.Execution.Observer().OnceOrder(clOrdId, listener.OrderEventFilled, func(update *listener.Identifiable) {
-		o := (*update).(*models.OrderUpdate)
-		logger.NewInfo(opID, fmt.Sprintf("🎯 [ONCE] 订单已成交: ID=%s, 成交均价=%s\n", o.ClOrdId, o.AvgPx))
-	})
+	sdk.Trading.OnceOrder(clOrdId, modules.OrderEventFilled, &testOrderListener{})
 	logger.NewInfo(opID, fmt.Sprintf("🚀 正在发送测试订单: %s %s...\n", req.InstId, req.Side))
-	err := sdk.Execution.PlaceOrders(ctx, []models.PlaceOrderReq{req})
+	err := sdk.Trading.PlaceOrders(ctx, []models.PlaceOrderReq{req})
 	if err != nil {
 		logger.NewError(opID, fmt.Sprintf("⚠️ 下单失败 (可能由于模拟盘余额不足或其他原因): %v", err))
 	} else {
@@ -243,6 +249,7 @@ func placeOrders(ctx context.Context, sdk *nexus.Client) error {
 	}
 	return err
 }
+
 func loadEnv(path string) map[string]string {
 	env := make(map[string]string)
 	file, err := os.Open(path)
@@ -262,8 +269,8 @@ func loadEnv(path string) map[string]string {
 	return env
 }
 
-func getOHLCV(ctx context.Context, sdk *nexus.Client, instId string) {
-	data, err := sdk.Execution.GetOHLCV(ctx, instId, "1m", 10)
+func getOHLCV(ctx context.Context, sdk *nexus.Modules, instId string) {
+	data, err := sdk.Market.GetOHLCV(ctx, instId, "1m", 10)
 	if err != nil {
 		logger.NewError("", fmt.Sprintf("❌ 获取 K 线数据失败: %v", err))
 	} else {
