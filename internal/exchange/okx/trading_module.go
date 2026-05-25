@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/YuanJey/nexus/pkg/models"
 	"github.com/YuanJey/nexus/pkg/modules"
@@ -15,6 +16,10 @@ type tradingModule struct {
 	bizWs *wsClient
 	order *orderComponent
 	algo  *algoOrderComponent
+
+	subMu    sync.Mutex
+	subOrder bool
+	subAlgo  bool
 }
 
 func newTradingModule(http *httpClient, priWs, bizWs *wsClient) *tradingModule {
@@ -28,6 +33,32 @@ func newTradingModule(http *httpClient, priWs, bizWs *wsClient) *tradingModule {
 	priWs.OnChannel("orders", m.order.handleMessage)
 	bizWs.OnChannel("orders-algo", m.algo.handleMessage)
 	return m
+}
+
+// ─── 账户设置 ──────────────────────────────────────────────────
+
+func (t *tradingModule) SetLeverage(ctx context.Context, instId string, lever string, mgnMode string) error {
+	body := map[string]string{
+		"instId":  instId,
+		"lever":   lever,
+		"mgnMode": mgnMode,
+	}
+	resp, err := t.http.post(ctx, "/api/v5/account/set-leverage", body)
+	if err != nil {
+		return fmt.Errorf("set leverage %s: %w", instId, err)
+	}
+	_ = resp
+	return nil
+}
+
+func (t *tradingModule) SetPositionMode(ctx context.Context, posMode string) error {
+	body := map[string]string{"posMode": posMode}
+	resp, err := t.http.post(ctx, "/api/v5/account/set-position-mode", body)
+	if err != nil {
+		return fmt.Errorf("set position mode: %w", err)
+	}
+	_ = resp
+	return nil
 }
 
 // ─── 下单/撤单/改单 ──────────────────────────────────────────────
@@ -138,34 +169,81 @@ func (t *tradingModule) CancelAlgoOrders(ctx context.Context, orders []models.Ca
 	return batchWrite(ctx, t.http, "/api/v5/trade/cancel-algos", okxCancels)
 }
 
-func (t *tradingModule) CancelAllAlgoOrders(ctx context.Context, instId string) error {
-	params := map[string]string{"instType": "SWAP", "ordType": "conditional"}
-	if instId != "" {
-		params["instId"] = instId
+// CancelAlgoByClOrdId 按 algoClOrdId 精准撤销单个策略委托。
+func (t *tradingModule) CancelAlgoByClOrdId(ctx context.Context, instId, algoClOrdId string) error {
+	for _, ordType := range allAlgoOrdTypes {
+		params := map[string]string{"instType": "SWAP", "ordType": ordType, "algoClOrdId": algoClOrdId}
+		if instId != "" {
+			params["instId"] = instId
+		}
+		resp, err := t.http.get(ctx, "/api/v5/trade/orders-algo-pending", params)
+		if err != nil {
+			return err
+		}
+		var pending []okxAlgoPendingItem
+		if err := json.Unmarshal(resp.Data, &pending); err != nil {
+			continue
+		}
+		if len(pending) == 0 {
+			continue
+		}
+		return t.CancelAlgoOrders(ctx, toCancelAlgoOrderReqs(pending))
 	}
-	resp, err := t.http.get(ctx, "/api/v5/trade/orders-algo-pending", params)
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
-	var pending []okxAlgoPendingItem
-	if err := json.Unmarshal(resp.Data, &pending); err != nil {
-		return err
+// allAlgoOrdTypes 全部策略单类型。
+var allAlgoOrdTypes = []string{"conditional", "trigger", "oco", "move_order_stop"}
+
+func (t *tradingModule) CancelAllAlgoOrders(ctx context.Context, instId string) error {
+	var allPending []okxAlgoPendingItem
+	for _, ordType := range allAlgoOrdTypes {
+		params := map[string]string{"instType": "SWAP", "ordType": ordType}
+		if instId != "" {
+			params["instId"] = instId
+		}
+		resp, err := t.http.get(ctx, "/api/v5/trade/orders-algo-pending", params)
+		if err != nil {
+			return err
+		}
+		var pending []okxAlgoPendingItem
+		if err := json.Unmarshal(resp.Data, &pending); err != nil {
+			continue
+		}
+		allPending = append(allPending, pending...)
 	}
-	if len(pending) == 0 {
+	if len(allPending) == 0 {
 		return nil
 	}
-	return t.CancelAlgoOrders(ctx, toCancelAlgoOrderReqs(pending))
+	return t.CancelAlgoOrders(ctx, toCancelAlgoOrderReqs(allPending))
 }
 
 // ─── Listener ────────────────────────────────────────────────────
 
 func (t *tradingModule) AttachOrder(l modules.OrderListener) func() {
-	return t.order.Attach(l)
+	detach := t.order.Attach(l)
+
+	t.subMu.Lock()
+	if !t.subOrder {
+		t.subOrder = true
+		_ = t.priWs.Subscribe([]map[string]string{{"channel": "orders", "instType": "ANY"}})
+	}
+	t.subMu.Unlock()
+
+	return detach
 }
 
 func (t *tradingModule) AttachAlgoOrder(l modules.AlgoOrderListener) func() {
-	return t.algo.Attach(l)
+	detach := t.algo.Attach(l)
+
+	t.subMu.Lock()
+	if !t.subAlgo {
+		t.subAlgo = true
+		_ = t.bizWs.Subscribe([]map[string]string{{"channel": "orders-algo", "instType": "ANY"}})
+	}
+	t.subMu.Unlock()
+
+	return detach
 }
 
 func (t *tradingModule) OnceOrder(clOrdId string, event modules.OrderEvent, l modules.OrderListener) func() {

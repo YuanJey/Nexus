@@ -159,6 +159,8 @@ func (c *httpClient) do(ctx context.Context, method, path string, body any) (*ap
 
 	code := result.GetCode()
 	if code != "0" {
+		fmt.Printf("[SDK] %s %s request: %s\n", method, path, bodyStr)
+		fmt.Printf("[SDK] %s %s response: %s\n", method, path, raw)
 		return nil, fmt.Errorf("okx error: code=%s msg=%s", code, result.Msg)
 	}
 	return &result, nil

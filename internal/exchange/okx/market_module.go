@@ -30,6 +30,36 @@ func newMarketModule(http *httpClient, ws *wsClient) *marketModule {
 	return m
 }
 
+// ─── GetInstrument ─────────────────────────────────────────────
+
+type okxInstrument struct {
+	CtVal  string `json:"ctVal"`
+	CtMult string `json:"ctMult"`
+	LotSz  string `json:"lotSz"`
+}
+
+func (m *marketModule) GetInstrument(ctx context.Context, instId string) (*models.Instrument, error) {
+	params := map[string]string{"instType": "SWAP", "instId": instId}
+	resp, err := m.http.get(ctx, "/api/v5/public/instruments", params)
+	if err != nil {
+		return nil, fmt.Errorf("get instrument %s: %w", instId, err)
+	}
+
+	var data []okxInstrument
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return nil, fmt.Errorf("unmarshal instrument %s: %w", instId, err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("instrument %s not found", instId)
+	}
+
+	ins := &models.Instrument{InstID: instId}
+	ins.CtVal, _ = strconv.ParseFloat(data[0].CtVal, 64)
+	ins.CtMult, _ = strconv.ParseFloat(data[0].CtMult, 64)
+	ins.LotSz, _ = strconv.ParseFloat(data[0].LotSz, 64)
+	return ins, nil
+}
+
 // ─── Attach ───────────────────────────────────────────────────
 
 func (m *marketModule) AttachTicker(instId string, l modules.TickerListener) func() {
@@ -38,10 +68,7 @@ func (m *marketModule) AttachTicker(instId string, l modules.TickerListener) fun
 	m.mu.Lock()
 	m.subs[instId]++
 	if m.subs[instId] == 1 {
-		m.ws.SendMsg(context.Background(), map[string]interface{}{
-			"op":   "subscribe",
-			"args": []map[string]string{{"channel": "tickers", "instId": instId}},
-		})
+		_ = m.ws.Subscribe([]map[string]string{{"channel": "tickers", "instId": instId}})
 	}
 	m.mu.Unlock()
 

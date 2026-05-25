@@ -46,6 +46,7 @@ type MarketModule interface {
 	AttachTicker(instId string, listener TickerListener) (detach func())
 	AttachTickers(instIds []string, listener TickerListener) (detach func())
 	GetOHLCV(ctx context.Context, instId, timeframe string, limit int) ([]models.Candle, error)
+	GetInstrument(ctx context.Context, instId string) (*models.Instrument, error)
 }
 
 type AccountModule interface {
@@ -59,6 +60,9 @@ type PositionModule interface {
 }
 
 type TradingModule interface {
+	SetLeverage(ctx context.Context, instId string, lever string, mgnMode string) error
+	SetPositionMode(ctx context.Context, posMode string) error
+
 	PlaceOrders(ctx context.Context, orders []models.PlaceOrderReq) error
 	CloseOrders(ctx context.Context, orders []models.PlaceOrderReq) error
 	ClosePositions(ctx context.Context, positions []models.ClosePositionReq) error
@@ -70,6 +74,7 @@ type TradingModule interface {
 	AmendAlgoOrders(ctx context.Context, orders []models.AmendAlgoOrderReq) error
 	CancelAlgoOrders(ctx context.Context, orders []models.CancelAlgoOrderReq) error
 	CancelAllAlgoOrders(ctx context.Context, instId string) error
+	CancelAlgoByClOrdId(ctx context.Context, instId, algoClOrdId string) error
 
 	AttachOrder(listener OrderListener) (detach func())
 	AttachAlgoOrder(listener AlgoOrderListener) (detach func())

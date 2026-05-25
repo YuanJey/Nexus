@@ -34,10 +34,7 @@ func (m *accountModule) AttachAccount(l modules.AccountListener) func() {
 	m.subMu.Lock()
 	if !m.sub {
 		m.sub = true
-		m.ws.SendMsg(context.Background(), map[string]interface{}{
-			"op":   "subscribe",
-			"args": []map[string]string{{"channel": "account"}},
-		})
+		_ = m.ws.Subscribe([]map[string]string{{"channel": "account"}})
 	}
 	m.subMu.Unlock()
 
@@ -52,7 +49,7 @@ func (m *accountModule) GetAccount(ctx context.Context) (*models.Account, error)
 		return nil, err
 	}
 
-	var data struct {
+	var data []struct {
 		TotalEq string `json:"totalEq"`
 		Details []struct {
 			Ccy       string `json:"ccy"`
@@ -65,9 +62,12 @@ func (m *accountModule) GetAccount(ctx context.Context) (*models.Account, error)
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		return nil, fmt.Errorf("unmarshal account: %w", err)
 	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("account: no data")
+	}
 
-	acc := &models.Account{TotalEq: data.TotalEq}
-	for _, d := range data.Details {
+	acc := &models.Account{TotalEq: data[0].TotalEq}
+	for _, d := range data[0].Details {
 		acc.Balances = append(acc.Balances, models.AccountBalance{
 			Ccy: d.Ccy, Eq: d.Eq, AvailEq: d.AvailEq,
 			FrozenBal: d.FrozenBal, UPL: d.Upl,

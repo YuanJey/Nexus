@@ -34,10 +34,7 @@ func (m *positionModule) AttachPosition(instId string, l modules.PositionListene
 	m.subMu.Lock()
 	if !m.sub {
 		m.sub = true
-		m.ws.SendMsg(context.Background(), map[string]interface{}{
-			"op":   "subscribe",
-			"args": []map[string]string{{"channel": "positions", "instType": "ANY"}},
-		})
+		_ = m.ws.Subscribe([]map[string]string{{"channel": "positions", "instType": "ANY"}})
 	}
 	m.subMu.Unlock()
 

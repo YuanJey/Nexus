@@ -44,12 +44,7 @@ func NewModules(apiKey, secretKey, passphrase string, simulated bool, opts ...Mo
 		opt(&o)
 	}
 
-	needPrivate := o.account || o.position || o.trading
-
-	var http *httpClient
-	if needPrivate {
-		http = newHTTPClient(apiKey, secretKey, passphrase, simulated)
-	}
+	http := newHTTPClient(apiKey, secretKey, passphrase, simulated)
 
 	pubURL := "wss://ws.okx.com:8443/ws/v5/public"
 	priURL := "wss://ws.okx.com:8443/ws/v5/private"

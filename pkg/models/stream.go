@@ -61,3 +61,11 @@ type Candle struct {
 	VolCcyQuote float64 `json:"volCcyQuote"` // 成交额 (计价币)
 	Confirm     int     `json:"confirm"`     // 是否确认 (0/1)
 }
+
+// Instrument 交易产品信息
+type Instrument struct {
+	InstID string  // 产品 ID
+	CtVal  float64 // 合约面值（如 ETH-USDT-SWAP = 0.1）
+	CtMult float64 // 合约乘数
+	LotSz  float64 // 最小下单量
+}
