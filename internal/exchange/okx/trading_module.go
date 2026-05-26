@@ -43,6 +43,17 @@ func (t *tradingModule) SetLeverage(ctx context.Context, instId string, lever st
 		"lever":   lever,
 		"mgnMode": mgnMode,
 	}
+	// 逐仓模式下需要分别设置 long/short 方向的杠杆
+	if mgnMode == string(models.MarginIsolated) {
+		for _, posSide := range []string{"long", "short"} {
+			body["posSide"] = posSide
+			_, err := t.http.post(ctx, "/api/v5/account/set-leverage", body)
+			if err != nil {
+				return fmt.Errorf("set leverage %s posSide=%s: %w", instId, posSide, err)
+			}
+		}
+		return nil
+	}
 	resp, err := t.http.post(ctx, "/api/v5/account/set-leverage", body)
 	if err != nil {
 		return fmt.Errorf("set leverage %s: %w", instId, err)

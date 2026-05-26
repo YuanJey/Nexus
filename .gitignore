@@ -1,0 +1,18 @@
+# Environment variables file (contains sensitive credentials)
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build output
+*.exe
+*.test
+*.out
+vendor/
+
+# Go workspace file
+go.work

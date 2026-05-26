@@ -30,6 +30,8 @@ type wsClient struct {
 	readyOnce sync.Once
 
 	subscriptions []map[string]string
+
+	loginCh chan struct{}
 }
 
 func (w *wsClient) Ready() <-chan struct{} {
@@ -136,18 +138,45 @@ func (w *wsClient) connect(ctx context.Context) error {
 	w.mu.Unlock()
 	defer w.cleanupConn()
 
-	// 1. 登录 (私有频道)
+	// 启动读取循环（必须先启动才能收到登录响应）
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go w.pingLoop(readCtx)
+
+	// readLoop 在后台 goroutine 中运行
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- w.readLoop(readCtx)
+	}()
+
+	// 1. 登录并等待确认（私有频道）
 	if w.apiKey != "" {
+		w.mu.Lock()
+		w.loginCh = make(chan struct{})
+		w.mu.Unlock()
+
 		if err := w.login(); err != nil {
+			cancel()
 			return fmt.Errorf("login failed: %w", err)
+		}
+
+		select {
+		case <-w.loginCh:
+			// 登录成功
+		case <-time.After(5 * time.Second):
+			cancel()
+			return fmt.Errorf("login timeout")
+		case <-readCtx.Done():
+			return fmt.Errorf("ws disconnected during login")
 		}
 	}
 
-	// 2. 恢复订阅
+	// 2. 恢复订阅（登录确认后再发）
 	w.mu.Lock()
 	if len(w.subscriptions) > 0 {
 		if err := w.sendMsg("subscribe", w.subscriptions); err != nil {
 			w.mu.Unlock()
+			cancel()
 			return fmt.Errorf("resubscribe failed: %w", err)
 		}
 	}
@@ -156,14 +185,8 @@ func (w *wsClient) connect(ctx context.Context) error {
 	// 通知连接已就绪
 	w.signalReady()
 
-	// 3. 启动读写循环
-	readCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	go w.pingLoop(readCtx)
-
-	// readLoop 阻塞直到断开
-	return w.readLoop(readCtx)
+	// 等待读取循环退出
+	return <-errCh
 }
 
 func (w *wsClient) Stop() error {
@@ -178,6 +201,9 @@ func (w *wsClient) cleanupConn() error {
 	defer w.mu.Unlock()
 	w.readyOnce = sync.Once{}
 	w.ready = make(chan struct{})
+	if w.loginCh != nil {
+		w.loginCh = nil
+	}
 	if w.conn != nil {
 		err := w.conn.Close()
 		w.conn = nil
@@ -251,8 +277,23 @@ func (w *wsClient) readLoop(ctx context.Context) error {
 	}
 }
 
-// routeMsg 解析 arg.channel 字段，路由到已注册的处理器
+// routeMsg 解析消息类型，路由到已注册的处理器或处理登录响应。
 func (w *wsClient) routeMsg(msg []byte) {
+	// 检查是否是登录响应
+	var eventEnvelope struct {
+		Event string `json:"event"`
+		Code  string `json:"code"`
+	}
+	if json.Unmarshal(msg, &eventEnvelope) == nil && eventEnvelope.Event == "login" {
+		w.mu.Lock()
+		if eventEnvelope.Code == "0" && w.loginCh != nil {
+			close(w.loginCh)
+			w.loginCh = nil
+		}
+		w.mu.Unlock()
+		return
+	}
+
 	var envelope struct {
 		Arg struct {
 			Channel string `json:"channel"`
