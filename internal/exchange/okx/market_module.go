@@ -12,21 +12,24 @@ import (
 )
 
 type marketModule struct {
-	http *httpClient
-	ws   *wsClient
-	comp *tickerComponent
-	subs map[string]int
-	mu   sync.Mutex
+	http       *httpClient
+	ws         *wsClient
+	comp       *tickerComponent
+	candleComp *candleComponent
+	subs       map[string]int
+	mu         sync.Mutex
 }
 
 func newMarketModule(http *httpClient, ws *wsClient) *marketModule {
 	m := &marketModule{
-		http: http,
-		ws:   ws,
-		comp: newTickerComponent(),
-		subs: make(map[string]int),
+		http:       http,
+		ws:         ws,
+		comp:       newTickerComponent(),
+		candleComp: newCandleComponent(),
+		subs:       make(map[string]int),
 	}
 	ws.OnChannel("tickers", m.comp.handleMessage)
+	// candle 频道名包含时间周期，需要在 AttachCandle 时动态注册
 	return m
 }
 
@@ -96,6 +99,39 @@ func (m *marketModule) AttachTickers(instIds []string, l modules.TickerListener)
 		for _, c := range cancels {
 			c()
 		}
+	}
+}
+
+// AttachCandle 订阅 K 线频道，推送已闭合的 K 线
+func (m *marketModule) AttachCandle(instId, timeframe string, l modules.CandleListener) func() {
+	channel := "candle" + timeframe
+
+	// 动态注册 candle 频道处理器（只需注册一次）
+	m.ws.OnChannel(channel, m.candleComp.handleMessage)
+
+	detachComp := m.candleComp.Attach(instId, l)
+
+	// 通过 channel+instId 作为 sub key 区分不同时间周期
+	subKey := channel + ":" + instId
+	m.mu.Lock()
+	m.subs[subKey]++
+	if m.subs[subKey] == 1 {
+		_ = m.ws.Subscribe([]map[string]string{{"channel": channel, "instId": instId}})
+	}
+	m.mu.Unlock()
+
+	return func() {
+		detachComp()
+		m.mu.Lock()
+		m.subs[subKey]--
+		if m.subs[subKey] <= 0 {
+			delete(m.subs, subKey)
+			m.ws.SendMsg(context.Background(), map[string]interface{}{
+				"op":   "unsubscribe",
+				"args": []map[string]string{{"channel": channel, "instId": instId}},
+			})
+		}
+		m.mu.Unlock()
 	}
 }
 

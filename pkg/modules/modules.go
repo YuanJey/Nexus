@@ -12,6 +12,10 @@ type TickerListener interface {
 	OnTicker(ticker *models.Ticker)
 }
 
+type CandleListener interface {
+	OnCandle(candle *models.Candle)
+}
+
 type AccountListener interface {
 	OnAccount(account *models.Account)
 }
@@ -45,6 +49,7 @@ const (
 type MarketModule interface {
 	AttachTicker(instId string, listener TickerListener) (detach func())
 	AttachTickers(instIds []string, listener TickerListener) (detach func())
+	AttachCandle(instId, timeframe string, listener CandleListener) (detach func())
 	GetOHLCV(ctx context.Context, instId, timeframe string, limit int) ([]models.Candle, error)
 	GetInstrument(ctx context.Context, instId string) (*models.Instrument, error)
 }
