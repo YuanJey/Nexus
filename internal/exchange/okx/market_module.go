@@ -137,13 +137,16 @@ func (m *marketModule) AttachCandle(instId, timeframe string, l modules.CandleLi
 
 // ─── GetOHLCV ─────────────────────────────────────────────────
 
-func (m *marketModule) GetOHLCV(ctx context.Context, instId, timeframe string, limit int) ([]models.Candle, error) {
+func (m *marketModule) GetOHLCV(ctx context.Context, instId, timeframe string, limit int, after ...string) ([]models.Candle, error) {
 	params := map[string]string{
 		"instId": instId,
 		"bar":    timeframe,
 	}
 	if limit > 0 {
 		params["limit"] = strconv.Itoa(limit)
+	}
+	if len(after) > 0 && after[0] != "" {
+		params["after"] = after[0]
 	}
 
 	resp, err := m.http.get(ctx, "/api/v5/market/candles", params)

@@ -50,7 +50,7 @@ type MarketModule interface {
 	AttachTicker(instId string, listener TickerListener) (detach func())
 	AttachTickers(instIds []string, listener TickerListener) (detach func())
 	AttachCandle(instId, timeframe string, listener CandleListener) (detach func())
-	GetOHLCV(ctx context.Context, instId, timeframe string, limit int) ([]models.Candle, error)
+	GetOHLCV(ctx context.Context, instId, timeframe string, limit int, after ...string) ([]models.Candle, error)
 	GetInstrument(ctx context.Context, instId string) (*models.Instrument, error)
 }
 
