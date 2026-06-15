@@ -58,11 +58,13 @@ func NewModules(apiKey, secretKey, passphrase string, simulated bool, opts ...Mo
 	var wsClients []*wsClient
 	m := &Modules{}
 
-	// Market — public WS
+	// Market — public WS（tickers）+ business WS（candles）
 	if o.market {
 		pubWs := newWSClient(pubURL)
-		m.Market = newMarketModule(http, pubWs)
-		wsClients = append(wsClients, pubWs)
+		bizWs := newWSClient(bizURL)
+		bizWs.setAuth(apiKey, secretKey, passphrase)
+		m.Market = newMarketModule(http, pubWs, bizWs)
+		wsClients = append(wsClients, pubWs, bizWs)
 	}
 
 	// Account / Position — 共享一条 private WS

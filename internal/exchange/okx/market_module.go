@@ -13,17 +13,19 @@ import (
 
 type marketModule struct {
 	http       *httpClient
-	ws         *wsClient
+	ws         *wsClient // public: tickers
+	bizWs      *wsClient // business: candles
 	comp       *tickerComponent
 	candleComp *candleComponent
 	subs       map[string]int
 	mu         sync.Mutex
 }
 
-func newMarketModule(http *httpClient, ws *wsClient) *marketModule {
+func newMarketModule(http *httpClient, ws, bizWs *wsClient) *marketModule {
 	m := &marketModule{
 		http:       http,
 		ws:         ws,
+		bizWs:      bizWs,
 		comp:       newTickerComponent(),
 		candleComp: newCandleComponent(),
 		subs:       make(map[string]int),
@@ -106,8 +108,8 @@ func (m *marketModule) AttachTickers(instIds []string, l modules.TickerListener)
 func (m *marketModule) AttachCandle(instId, timeframe string, l modules.CandleListener) func() {
 	channel := "candle" + timeframe
 
-	// 动态注册 candle 频道处理器（只需注册一次）
-	m.ws.OnChannel(channel, m.candleComp.handleMessage)
+	// candle 频道在 business WS 上，注册处理器到 bizWs
+	m.bizWs.OnChannel(channel, m.candleComp.handleMessage)
 
 	detachComp := m.candleComp.Attach(instId, l)
 
@@ -116,7 +118,7 @@ func (m *marketModule) AttachCandle(instId, timeframe string, l modules.CandleLi
 	m.mu.Lock()
 	m.subs[subKey]++
 	if m.subs[subKey] == 1 {
-		_ = m.ws.Subscribe([]map[string]string{{"channel": channel, "instId": instId}})
+		_ = m.bizWs.Subscribe([]map[string]string{{"channel": channel, "instId": instId}})
 	}
 	m.mu.Unlock()
 
@@ -126,7 +128,7 @@ func (m *marketModule) AttachCandle(instId, timeframe string, l modules.CandleLi
 		m.subs[subKey]--
 		if m.subs[subKey] <= 0 {
 			delete(m.subs, subKey)
-			m.ws.SendMsg(context.Background(), map[string]interface{}{
+			m.bizWs.SendMsg(context.Background(), map[string]interface{}{
 				"op":   "unsubscribe",
 				"args": []map[string]string{{"channel": channel, "instId": instId}},
 			})
