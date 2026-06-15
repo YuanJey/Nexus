@@ -11,7 +11,7 @@ import (
 
 type candleComponent struct {
 	mu        sync.RWMutex
-	listeners map[string]map[int]modules.CandleListener // key: instId
+	listeners map[string]map[int]modules.CandleListener
 	nextID    int
 }
 
@@ -48,51 +48,49 @@ func (c *candleComponent) handleMessage(msg []byte) {
 	}
 
 	for _, rawData := range resp.Data {
-		var rows [][]string
-		if err := json.Unmarshal(rawData, &rows); err != nil {
+		// OKX data 格式: "data":[["ts","o","h","l","c","vol","volCcy","volCcyQuote","confirm"]]
+		// 每个 rawData 是一个 []string，不是 [][]string
+		var row []string
+		if err := json.Unmarshal(rawData, &row); err != nil {
 			continue
 		}
-		for _, row := range rows {
-			if len(row) < 6 {
-				continue
-			}
-			candle := models.Candle{}
-			candle.Ts, _ = strconv.ParseInt(row[0], 10, 64)
-			candle.Open, _ = strconv.ParseFloat(row[1], 64)
-			candle.High, _ = strconv.ParseFloat(row[2], 64)
-			candle.Low, _ = strconv.ParseFloat(row[3], 64)
-			candle.Close, _ = strconv.ParseFloat(row[4], 64)
-			candle.Volume, _ = strconv.ParseFloat(row[5], 64)
-			if len(row) > 6 {
-				candle.VolCcy, _ = strconv.ParseFloat(row[6], 64)
-			}
-			if len(row) > 7 {
-				candle.VolCcyQuote, _ = strconv.ParseFloat(row[7], 64)
-			}
-			if len(row) > 8 {
-				conf, _ := strconv.Atoi(row[8])
-				candle.Confirm = conf
-			}
-
-			// 只推送已确认（已闭合）的 K 线
-			if candle.Confirm != 1 {
-				continue
-			}
-
-			c.mu.RLock()
-			// 按品种分发
-			if ls, ok := c.listeners[resp.Arg.InstId]; ok {
-				for _, l := range ls {
-					l.OnCandle(&candle)
-				}
-			}
-			// 全局分发
-			if ls, ok := c.listeners[""]; ok {
-				for _, l := range ls {
-					l.OnCandle(&candle)
-				}
-			}
-			c.mu.RUnlock()
+		if len(row) < 6 {
+			continue
 		}
+		candle := models.Candle{}
+		candle.Ts, _ = strconv.ParseInt(row[0], 10, 64)
+		candle.Open, _ = strconv.ParseFloat(row[1], 64)
+		candle.High, _ = strconv.ParseFloat(row[2], 64)
+		candle.Low, _ = strconv.ParseFloat(row[3], 64)
+		candle.Close, _ = strconv.ParseFloat(row[4], 64)
+		candle.Volume, _ = strconv.ParseFloat(row[5], 64)
+		if len(row) > 6 {
+			candle.VolCcy, _ = strconv.ParseFloat(row[6], 64)
+		}
+		if len(row) > 7 {
+			candle.VolCcyQuote, _ = strconv.ParseFloat(row[7], 64)
+		}
+		if len(row) > 8 {
+			conf, _ := strconv.Atoi(row[8])
+			candle.Confirm = conf
+		}
+
+		// 只推送已闭合的 K 线
+		if candle.Confirm != 1 {
+			continue
+		}
+
+		c.mu.RLock()
+		if ls, ok := c.listeners[resp.Arg.InstId]; ok {
+			for _, l := range ls {
+				l.OnCandle(&candle)
+			}
+		}
+		if ls, ok := c.listeners[""]; ok {
+			for _, l := range ls {
+				l.OnCandle(&candle)
+			}
+		}
+		c.mu.RUnlock()
 	}
 }
