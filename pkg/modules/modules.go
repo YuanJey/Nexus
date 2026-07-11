@@ -52,6 +52,7 @@ type MarketModule interface {
 	AttachCandle(instId, timeframe string, listener CandleListener) (detach func())
 	GetOHLCV(ctx context.Context, instId, timeframe string, limit int, after ...string) ([]models.Candle, error)
 	GetInstrument(ctx context.Context, instId string) (*models.Instrument, error)
+	GetOptSummary(ctx context.Context, instFamily, expTime string) ([]models.OptSummary, error)
 }
 
 type AccountModule interface {

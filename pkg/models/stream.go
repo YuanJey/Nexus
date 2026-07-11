@@ -69,3 +69,29 @@ type Instrument struct {
 	CtMult float64 // 合约乘数
 	LotSz  float64 // 最小下单量
 }
+
+// OptSummary 期权概要信息（对应 GET /api/v5/public/opt-summary）
+type OptSummary struct {
+	InstID   string  `json:"instId"`   // 期权合约 ID，如 ETH-USD-260712-1720-C
+	InstType string  `json:"instType"` // 产品类型，OPTION
+	Uly      string  `json:"uly"`      // 标的资产，如 ETH-USD
+	Delta    float64 `json:"delta"`    // 模型 delta
+	DeltaBS  float64 `json:"deltaBS"`  // BS delta
+	Gamma    float64 `json:"gamma"`    // 模型 gamma
+	GammaBS  float64 `json:"gammaBS"`  // BS gamma
+	Theta    float64 `json:"theta"`    // 模型 theta
+	ThetaBS  float64 `json:"thetaBS"`  // BS theta
+	Vega     float64 `json:"vega"`     // 模型 vega
+	VegaBS   float64 `json:"vegaBS"`   // BS vega
+	MarkVol  float64 `json:"markVol"`  // 标记波动率
+	RealVol  float64 `json:"realVol"`  // 已实现波动率
+	VolLv    float64 `json:"volLv"`    // 波动率水平
+	Distance float64 `json:"distance"` // 距离
+	Lever    float64 `json:"lever"`    // 杠杆倍数
+	FwdPx    float64 `json:"fwdPx"`    // 远期价格
+	AskVol   string  `json:"askVol"`   // 卖盘波动率
+	BidVol   string  `json:"bidVol"`   // 买盘波动率
+	BuyAPR   string  `json:"buyApr"`   // 买入年化收益率
+	SellAPR  string  `json:"sellApr"`  // 卖出年化收益率
+	Ts       string  `json:"ts"`       // 时间戳（ms）
+}

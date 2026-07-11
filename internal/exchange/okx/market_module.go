@@ -185,3 +185,26 @@ func (m *marketModule) GetOHLCV(ctx context.Context, instId, timeframe string, l
 	}
 	return result, nil
 }
+
+// ─── GetOptSummary ──────────────────────────────────────────────
+
+// GetOptSummary 获取期权概要信息
+// instFamily: 标的指数，如 ETH-USD
+// expTime: 到期时间，如 260712
+func (m *marketModule) GetOptSummary(ctx context.Context, instFamily, expTime string) ([]models.OptSummary, error) {
+	params := map[string]string{
+		"instFamily": instFamily,
+		"expTime":    expTime,
+	}
+
+	resp, err := m.http.get(ctx, "/api/v5/public/opt-summary", params)
+	if err != nil {
+		return nil, fmt.Errorf("get opt-summary: %w", err)
+	}
+
+	var data []models.OptSummary
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return nil, fmt.Errorf("unmarshal opt-summary: %w", err)
+	}
+	return data, nil
+}
